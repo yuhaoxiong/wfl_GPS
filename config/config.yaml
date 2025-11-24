@@ -1,0 +1,32 @@
+camera:
+  device: /dev/cam_main
+  device2: /dev/cam_aux
+  fps: 30
+  jpeg_quality: 85
+  resolution:
+  - 1920
+  - 1080
+gps:
+  baudrate: 9600
+  parity: N
+  serial_port: /dev/ttyS4
+  slave_address: 1
+  stopbits: 1
+  timeout: 0.5
+system:
+  capture_interval: 5.0
+  device_id: TERMINAL_002
+  log_level: INFO
+  log_path: /var/log/road-capture/app.log
+upload:
+  backend_url: http://121.37.178.162/api/blade-qdfl/qianjibianImgRecognition/save
+  offline_queue:
+    enabled: true
+    max_size: 1000
+    persist_path: /var/lib/road-capture/queue.db
+  retry:
+    base_delay: 2.0
+    exponential_base: 2.0
+    max_attempts: 5
+    max_delay: 60.0
+  timeout: 10.0

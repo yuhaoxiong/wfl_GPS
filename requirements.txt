@@ -1,0 +1,33 @@
+# Road Photo Capture System - Core Dependencies
+# Python 3.9+
+
+# Hardware Interface
+pyserial>=3.5          # RS485 serial communication
+minimalmodbus>=2.0     # Modbus RTU protocol
+opencv-python>=4.8.0   # Camera capture (alternative: picamera2 for Raspberry Pi)
+
+# HTTP Communication
+requests>=2.31.0       # HTTP requests (synchronous)
+# httpx>=0.25.0        # Uncomment for async HTTP support
+
+# Scheduling & Concurrency
+APScheduler>=3.10.4    # Advanced task scheduling
+
+# Image Processing
+Pillow>=10.0.0         # Image manipulation and compression
+
+# Configuration Management
+PyYAML>=6.0.1          # YAML config file parsing
+python-dotenv>=1.0.0   # Environment variable loading
+pydantic>=2.4.0        # Configuration validation
+
+# Logging
+loguru>=0.7.2          # Structured logging
+
+# System Integration
+python-daemon>=3.0.1   # Daemon/service support (Linux)
+
+# Development & Testing (optional)
+# pytest>=7.4.0
+# pytest-cov>=4.1.0
+# pytest-mock>=3.12.0
