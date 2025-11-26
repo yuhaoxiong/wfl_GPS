@@ -16,7 +16,7 @@ gps:
 system:
   capture_interval: 5.0
   device_id: TERMINAL_002
-  log_level: INFO
+  log_level: DEBUG
   log_path: /var/log/road-capture/app.log
 upload:
   backend_url: http://121.37.178.162/api/blade-qdfl/qianjibianImgRecognition/save

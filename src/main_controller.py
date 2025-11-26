@@ -214,7 +214,7 @@ class MainController:
 
             # 4. 异步上传
             # 如果速度为0,不上传
-            if speed_kmh is not None and speed_kmh == 0:
+            if speed_kmh is None or speed_kmh == 0:
                 if self.debug:
                     print(f"  ⚠ Speed is 0, skipping upload")
             elif self.upload_manager.enqueue(payload):
