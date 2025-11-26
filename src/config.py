@@ -35,7 +35,7 @@ class CameraConfig:
 @dataclass
 class GPSConfig:
     """GPS模块配置"""
-    serial_port: str = "/dev/ttyUSB0"
+    serial_port: str = "/dev/ttyS4"
     baudrate: int = 9600
     parity: str = "N"
     stopbits: int = 1
@@ -63,7 +63,7 @@ class OfflineQueueConfig:
 @dataclass
 class UploadConfig:
     """上传配置"""
-    backend_url: str = "http://localhost:8000/api/upload"
+    backend_url: str = "http://121.37.178.162/api/blade-qdfl/qianjibianImgRecognition/save"
     timeout: float = 10.0
     retry: RetryConfig = field(default_factory=RetryConfig)
     offline_queue: OfflineQueueConfig = field(default_factory=OfflineQueueConfig)
@@ -75,7 +75,7 @@ class SystemConfig:
     device_id: str = "TERMINAL_001"
     log_level: str = "INFO"
     log_path: str = "/var/log/road-capture/app.log"
-    capture_interval: float = 1.0  # 采集间隔(秒)
+    capture_interval: float = 2.0  # 采集间隔(秒)
 
 
 @dataclass
