@@ -12,6 +12,9 @@ from typing import Optional, Tuple, Union
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+import os
+import glob
+from typing import Optional, Tuple, Union, Set, List
 
 try:
     import cv2
@@ -48,6 +51,9 @@ class CameraManager:
     使用OpenCV进行摄像头控制和图像采集
     """
 
+    # 类级别集合，记录所有实例已连接的设备路径
+    connected_devices: Set[str] = set()
+
     def __init__(
         self,
         device: str = '/dev/video0',
@@ -77,6 +83,9 @@ class CameraManager:
 
         self.camera = None
         self._is_opened = False
+        
+        # 记录当前实例实际连接的设备路径(可能与self.device不同)
+        self._current_device_path: Optional[str] = None
 
         # 初始化摄像头
         self._init_camera()
@@ -84,74 +93,181 @@ class CameraManager:
     def _init_camera(self):
         """初始化摄像头"""
         try:
+            # 尝试连接配置的设备
+            if self._connect_device(self.device):
+                return
+
+            # 如果连接失败且启用了自动重连，尝试扫描其他可用设备
+            if self.auto_reconnect:
+                if self.debug:
+                    print(f"Failed to open {self.device}, scanning for other devices...")
+                
+                available_devices = self._scan_video_devices()
+                for dev in available_devices:
+                    if self.debug:
+                        print(f"Trying scanned device: {dev}")
+                    
+                    if self._connect_device(dev):
+                        print(f"✓ Automatically connected to alternative device: {dev}")
+                        # 更新配置的设备路径，以便下次优先尝试
+                        self.device = dev
+                        return
+
+            # 如果都失败了
+            raise RuntimeError(f"Failed to initialize camera {self.device} and no alternatives found")
+
+        except Exception as e:
+            self._is_opened = False
+            # 确保清理
+            if self._current_device_path:
+                CameraManager.connected_devices.discard(self._current_device_path)
+                self._current_device_path = None
+            
+            if not self.auto_reconnect:
+                raise RuntimeError(f"Failed to initialize camera {self.device}: {e}")
+            elif self.debug:
+                print(f"Camera init failed: {e}")
+
+    def _connect_device(self, device_path: str) -> bool:
+        """
+        尝试连接指定设备
+        
+        Args:
+            device_path: 设备路径
+            
+        Returns:
+            True: 连接成功, False: 失败
+        """
+        # 检查是否已被其他实例占用 (忽略自己占用的)
+        if device_path in CameraManager.connected_devices and device_path != self._current_device_path:
+            if self.debug:
+                print(f"Device {device_path} is busy (used by another CameraManager)")
+            return False
+
+        try:
             # 解析设备路径
-            device_index = self._parse_device()
+            device_index = self._parse_device(device_path)
 
             # 打开摄像头
-            self.camera = cv2.VideoCapture(device_index)
+            camera = cv2.VideoCapture(device_index)
 
-            if not self.camera.isOpened():
-                raise RuntimeError(f"Failed to open camera: {self.device}")
+            if not camera.isOpened():
+                return False
 
             # 设置分辨率
-            self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, self.resolution[0])
-            self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, self.resolution[1])
+            camera.set(cv2.CAP_PROP_FRAME_WIDTH, self.resolution[0])
+            camera.set(cv2.CAP_PROP_FRAME_HEIGHT, self.resolution[1])
 
             # 设置帧率
-            self.camera.set(cv2.CAP_PROP_FPS, self.fps)
+            camera.set(cv2.CAP_PROP_FPS, self.fps)
 
             # 验证实际分辨率
-            actual_width = int(self.camera.get(cv2.CAP_PROP_FRAME_WIDTH))
-            actual_height = int(self.camera.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            actual_fps = int(self.camera.get(cv2.CAP_PROP_FPS))
+            actual_width = int(camera.get(cv2.CAP_PROP_FRAME_WIDTH))
+            actual_height = int(camera.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            actual_fps = int(camera.get(cv2.CAP_PROP_FPS))
 
             if self.debug:
-                print(f"Camera initialized: {self.device}")
+                print(f"Camera initialized: {device_path}")
                 print(f"  Requested: {self.resolution[0]}x{self.resolution[1]} @ {self.fps}fps")
                 print(f"  Actual: {actual_width}x{actual_height} @ {actual_fps}fps")
 
             # 预热摄像头(读取并丢弃前几帧)
             for _ in range(5):
-                self.camera.read()
+                camera.read()
 
+            # 成功连接，更新状态
+            self.camera = camera
             self._is_opened = True
+            
+            # 更新注册表
+            if self._current_device_path and self._current_device_path != device_path:
+                CameraManager.connected_devices.discard(self._current_device_path)
+            
+            self._current_device_path = device_path
+            CameraManager.connected_devices.add(device_path)
+            
+            return True
 
         except Exception as e:
-            self._is_opened = False
-            raise RuntimeError(f"Failed to initialize camera {self.device}: {e}")
+            if self.debug:
+                print(f"Error connecting to {device_path}: {e}")
+            if camera:
+                camera.release()
+            return False
 
-    def _parse_device(self) -> Union[int, str]:
+    def _scan_video_devices(self) -> List[str]:
+        """
+        扫描可用视频设备
+        
+        Returns:
+            可用设备路径列表
+        """
+        devices = []
+        
+        # Linux
+        if os.name == 'posix':
+            # 查找 /dev/video*
+            candidates = glob.glob('/dev/video*')
+            # 排序以保持确定性
+            candidates.sort()
+            
+            for dev in candidates:
+                # 过滤掉已被占用的设备
+                if dev not in CameraManager.connected_devices or dev == self._current_device_path:
+                    devices.append(dev)
+                    
+        # Windows
+        else:
+            # 尝试索引 0-10
+            for i in range(10):
+                # Windows下没有标准路径，我们用索引作为标识
+                # 注意：这只是一个约定，CameraManager需要能处理整数索引
+                if i not in CameraManager.connected_devices and i != self._current_device_path:
+                    # 简单检查是否可打开（这会稍微慢一点，但Windows没有好的枚举方法）
+                    cap = cv2.VideoCapture(i)
+                    if cap.isOpened():
+                        devices.append(i)
+                        cap.release()
+        
+        return devices
+
+    def _parse_device(self, device_path: Optional[str] = None) -> Union[int, str]:
         """
         解析设备路径
+        
+        Args:
+            device_path: 设备路径，默认为 self.device
 
         Returns:
             设备索引 (OpenCV使用整数索引)
         """
+        target = device_path if device_path is not None else self.device
+
         # Windows: 直接使用数字索引
-        if isinstance(self.device, int):
-            return self.device
+        if isinstance(target, int):
+            return target
 
         # Linux: 从/dev/videoX提取索引
-        if self.device.startswith('/dev/video'):
+        if isinstance(target, str) and target.startswith('/dev/video'):
             try:
-                return int(self.device.replace('/dev/video', ''))
+                return int(target.replace('/dev/video', ''))
             except ValueError:
                 pass
                 
         # 其他/dev/* 路径(如udev自定义别名)直接返回字符串
-        if self.device.startswith('/dev/') and Path(self.device).exists():
-            return self.device
+        if isinstance(target, str) and target.startswith('/dev/') and Path(target).exists():
+            return target
             
         # 尝试直接转换为整数
         try:
-            return int(self.device)
-        except ValueError:
+            return int(target)
+        except (ValueError, TypeError):
             pass
 
         # 默认使用0
         if self.debug:
-            print(f"Warning: Could not parse device '{self.device}', using device string as fallback")
-        return self.device
+            print(f"Warning: Could not parse device '{target}', using device string as fallback")
+        return target
 
     def is_opened(self) -> bool:
         """
@@ -345,7 +461,14 @@ class CameraManager:
         if self.camera is not None:
             self.camera.release()
             self._is_opened = False
-            if self.debug:
+            
+            # 从注册表中移除
+            if self._current_device_path:
+                CameraManager.connected_devices.discard(self._current_device_path)
+                if self.debug:
+                    print(f"Camera {self._current_device_path} closed and released")
+                self._current_device_path = None
+            elif self.debug:
                 print("Camera closed")
 
     def __enter__(self):
