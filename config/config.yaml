@@ -9,7 +9,7 @@ camera:
 gps:
   baudrate: 9600
   parity: N
-  serial_port: /dev/ttyS4
+  serial_port: /dev/ttyS3
   slave_address: 1
   stopbits: 1
   timeout: 0.5
