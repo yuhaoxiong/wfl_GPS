@@ -98,7 +98,9 @@ class MainController:
                 resolution=self.config.camera.resolution,
                 fps=self.config.camera.fps,
                 jpeg_quality=self.config.camera.jpeg_quality,
-                auto_reconnect=True,
+                auto_reconnect=self.config.camera.auto_reconnect,
+                reconnect_delay=self.config.camera.reconnect_delay,
+                max_reconnect_attempts=self.config.camera.max_reconnect_attempts,
                 debug=self.debug
             )
             self.camera_managers.append(primary_cam)
@@ -111,7 +113,9 @@ class MainController:
                         resolution=self.config.camera.resolution,
                         fps=self.config.camera.fps,
                         jpeg_quality=self.config.camera.jpeg_quality,
-                        auto_reconnect=True,
+                        auto_reconnect=self.config.camera.auto_reconnect,
+                        reconnect_delay=self.config.camera.reconnect_delay,
+                        max_reconnect_attempts=self.config.camera.max_reconnect_attempts,
                         debug=self.debug
                     )
                     self.camera_managers.append(secondary_cam)

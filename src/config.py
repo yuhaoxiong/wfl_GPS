@@ -30,6 +30,9 @@ class CameraConfig:
     resolution: tuple = (1920, 1080)
     fps: int = 30
     jpeg_quality: int = 85
+    auto_reconnect: bool = True  # 自动重连
+    reconnect_delay: float = 3.0  # 重连延迟(秒) - 增加延迟提高成功率
+    max_reconnect_attempts: int = 5  # 最大重连次数 - 多次重试确保连接成功
 
 
 @dataclass
@@ -169,6 +172,9 @@ class ConfigLoader:
                     self.config.camera.resolution = tuple(cam['resolution'])
                 self.config.camera.fps = cam.get('fps', self.config.camera.fps)
                 self.config.camera.jpeg_quality = cam.get('jpeg_quality', self.config.camera.jpeg_quality)
+                self.config.camera.auto_reconnect = cam.get('auto_reconnect', self.config.camera.auto_reconnect)
+                self.config.camera.reconnect_delay = cam.get('reconnect_delay', self.config.camera.reconnect_delay)
+                self.config.camera.max_reconnect_attempts = cam.get('max_reconnect_attempts', self.config.camera.max_reconnect_attempts)
 
             # GPS配置
             if 'gps' in data:
@@ -304,6 +310,9 @@ class ConfigLoader:
                 'resolution': list(self.config.camera.resolution),
                 'fps': self.config.camera.fps,
                 'jpeg_quality': self.config.camera.jpeg_quality,
+                'auto_reconnect': self.config.camera.auto_reconnect,
+                'reconnect_delay': self.config.camera.reconnect_delay,
+                'max_reconnect_attempts': self.config.camera.max_reconnect_attempts,
             },
             'gps': {
                 'serial_port': self.config.gps.serial_port,
