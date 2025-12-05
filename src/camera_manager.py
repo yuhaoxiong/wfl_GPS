@@ -8,6 +8,7 @@ Handles camera initialization, image capture, and Base64 encoding
 
 import base64
 import io
+import time
 from typing import Optional, Tuple, Union
 from dataclasses import dataclass
 from datetime import datetime
@@ -55,6 +56,8 @@ class CameraManager:
         fps: int = 30,
         jpeg_quality: int = 85,
         auto_reconnect: bool = True,
+        reconnect_delay: float = 3.0,
+        max_reconnect_attempts: int = 3,
         debug: bool = False
     ):
         """
@@ -66,6 +69,8 @@ class CameraManager:
             fps: 帧率
             jpeg_quality: JPEG压缩质量 (1-100)
             auto_reconnect: 自动重连
+            reconnect_delay: 重连延迟时间(秒)
+            max_reconnect_attempts: 最大重连尝试次数
             debug: 调试模式
         """
         self.device = device
@@ -73,6 +78,8 @@ class CameraManager:
         self.fps = fps
         self.jpeg_quality = jpeg_quality
         self.auto_reconnect = auto_reconnect
+        self.reconnect_delay = reconnect_delay
+        self.max_reconnect_attempts = max_reconnect_attempts
         self.debug = debug
 
         self.camera = None
@@ -170,73 +177,158 @@ class CameraManager:
             CaptureResult对象
         """
         timestamp = datetime.now()
-
-        # 检查摄像头状态
-        if not self.is_opened():
-            if self.auto_reconnect:
-                try:
-                    if self.debug:
-                        print("Camera disconnected, attempting reconnect...")
-                    self._init_camera()
-                except Exception as e:
+        
+        # 尝试拍照，如果失败则进行重连
+        for attempt in range(self.max_reconnect_attempts + 1):
+            # 检查摄像头状态
+            if not self.is_opened():
+                if self.auto_reconnect and attempt < self.max_reconnect_attempts:
+                    try:
+                        if self.debug:
+                            print(f"摄像头断开连接，尝试重连 (第 {attempt + 1}/{self.max_reconnect_attempts} 次)...")
+                        
+                        # 延迟后重连
+                        if attempt > 0:  # 第一次检测到断开时不延迟，后续重试才延迟
+                            if self.debug:
+                                print(f"等待 {self.reconnect_delay} 秒后重试...")
+                            time.sleep(self.reconnect_delay)
+                        
+                        # 关闭旧连接
+                        if self.camera is not None:
+                            try:
+                                self.camera.release()
+                            except:
+                                pass
+                        
+                        # 重新初始化
+                        self._init_camera()
+                        
+                        if self.debug:
+                            print("摄像头重连成功")
+                        
+                    except Exception as e:
+                        if self.debug:
+                            print(f"重连失败: {e}")
+                        
+                        # 如果这是最后一次尝试，返回错误
+                        if attempt >= self.max_reconnect_attempts - 1:
+                            return CaptureResult(
+                                success=False,
+                                timestamp=timestamp,
+                                error_message=f"重连失败 (尝试 {attempt + 1} 次): {e}"
+                            )
+                        # 否则继续下一次重试
+                        continue
+                else:
                     return CaptureResult(
                         success=False,
                         timestamp=timestamp,
-                        error_message=f"Reconnection failed: {e}"
+                        error_message="摄像头未打开且自动重连已禁用"
                     )
-            else:
+
+            # 读取帧
+            try:
+                ret, frame = self.camera.read()
+
+                if not ret or frame is None:
+                    # 标记摄像头为断开状态
+                    self._is_opened = False
+                    
+                    if self.auto_reconnect and attempt < self.max_reconnect_attempts:
+                        if self.debug:
+                            print(f"读取帧失败，尝试重连 (第 {attempt + 1}/{self.max_reconnect_attempts} 次)...")
+                        
+                        # 延迟后重试
+                        if self.debug:
+                            print(f"等待 {self.reconnect_delay} 秒后重试...")
+                        time.sleep(self.reconnect_delay)
+                        
+                        # 继续下一次重试
+                        continue
+                    else:
+                        return CaptureResult(
+                            success=False,
+                            timestamp=timestamp,
+                            error_message=f"读取帧失败 (尝试 {attempt + 1} 次)"
+                        )
+
+                # 获取实际分辨率
+                height, width = frame.shape[:2]
+
+                # 压缩为JPEG
+                encode_params = [cv2.IMWRITE_JPEG_QUALITY, self.jpeg_quality]
+                success, buffer = cv2.imencode('.jpg', frame, encode_params)
+
+                if not success:
+                    return CaptureResult(
+                        success=False,
+                        timestamp=timestamp,
+                        error_message="图像JPEG编码失败"
+                    )
+
+                # 转换为bytes
+                image_bytes = buffer.tobytes()
+
+                # Base64编码
+                image_base64 = base64.b64encode(image_bytes).decode('utf-8')
+
                 return CaptureResult(
-                    success=False,
+                    success=True,
+                    image_data=image_bytes,
+                    image_base64=image_base64,
                     timestamp=timestamp,
-                    error_message="Camera not opened"
+                    resolution=(width, height),
+                    file_size=len(image_bytes)
                 )
 
-        # 读取帧
-        try:
-            ret, frame = self.camera.read()
-
-            if not ret or frame is None:
-                return CaptureResult(
-                    success=False,
-                    timestamp=timestamp,
-                    error_message="Failed to read frame from camera"
-                )
-
-            # 获取实际分辨率
-            height, width = frame.shape[:2]
-
-            # 压缩为JPEG
-            encode_params = [cv2.IMWRITE_JPEG_QUALITY, self.jpeg_quality]
-            success, buffer = cv2.imencode('.jpg', frame, encode_params)
-
-            if not success:
-                return CaptureResult(
-                    success=False,
-                    timestamp=timestamp,
-                    error_message="Failed to encode image as JPEG"
-                )
-
-            # 转换为bytes
-            image_bytes = buffer.tobytes()
-
-            # Base64编码
-            image_base64 = base64.b64encode(image_bytes).decode('utf-8')
-
-            return CaptureResult(
-                success=True,
-                image_data=image_bytes,
-                image_base64=image_base64,
-                timestamp=timestamp,
-                resolution=(width, height),
-                file_size=len(image_bytes)
-            )
-
-        except Exception as e:
-            return CaptureResult(
-                success=False,
-                timestamp=timestamp,
-                error_message=f"Capture error: {e}"
-            )
+            except cv2.error as e:
+                # OpenCV 特定错误
+                self._is_opened = False
+                
+                if self.auto_reconnect and attempt < self.max_reconnect_attempts:
+                    if self.debug:
+                        print(f"OpenCV错误: {e}，尝试重连 (第 {attempt + 1}/{self.max_reconnect_attempts} 次)...")
+                    
+                    # 延迟后重试
+                    if self.debug:
+                        print(f"等待 {self.reconnect_delay} 秒后重试...")
+                    time.sleep(self.reconnect_delay)
+                    
+                    continue
+                else:
+                    return CaptureResult(
+                        success=False,
+                        timestamp=timestamp,
+                        error_message=f"OpenCV错误 (尝试 {attempt + 1} 次): {e}"
+                    )
+                    
+            except Exception as e:
+                # 其他异常
+                self._is_opened = False
+                
+                if self.auto_reconnect and attempt < self.max_reconnect_attempts:
+                    if self.debug:
+                        print(f"拍照异常: {e}，尝试重连 (第 {attempt + 1}/{self.max_reconnect_attempts} 次)...")
+                    
+                    # 延迟后重试
+                    if self.debug:
+                        print(f"等待 {self.reconnect_delay} 秒后重试...")
+                    time.sleep(self.reconnect_delay)
+                    
+                    continue
+                else:
+                    return CaptureResult(
+                        success=False,
+                        timestamp=timestamp,
+                        error_message=f"拍照异常 (尝试 {attempt + 1} 次): {e}"
+                    )
+        
+        # 理论上不应该到这里
+        return CaptureResult(
+            success=False,
+            timestamp=timestamp,
+            error_message="拍照失败：超过最大重试次数"
+        )
 
     def capture_to_file(self, filename: str) -> bool:
         """
