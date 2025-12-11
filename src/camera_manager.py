@@ -85,11 +85,44 @@ class CameraManager:
         self.camera = None
         self._is_opened = False
 
-        # 初始化摄像头
-        self._init_camera()
+        # 初始化摄像头（带重连机制）
+        self._init_camera_with_retry()
+
+    def _init_camera_with_retry(self):
+        """带重连机制的摄像头初始化"""
+        last_error = None
+        
+        for attempt in range(self.max_reconnect_attempts + 1):
+            try:
+                if attempt > 0:
+                    if self.debug:
+                        print(f"摄像头初始化重试 (第 {attempt}/{self.max_reconnect_attempts} 次)...")
+                    time.sleep(self.reconnect_delay)
+                
+                self._init_camera()
+                return  # 成功则返回
+                
+            except Exception as e:
+                last_error = e
+                if self.debug:
+                    print(f"摄像头初始化失败: {e}")
+                
+                # 如果这是最后一次尝试，抛出异常
+                if attempt >= self.max_reconnect_attempts:
+                    raise RuntimeError(
+                        f"摄像头初始化失败，已尝试 {attempt + 1} 次: {last_error}"
+                    )
+                
+                # 清理失败的连接
+                if self.camera is not None:
+                    try:
+                        self.camera.release()
+                    except:
+                        pass
+                    self.camera = None
 
     def _init_camera(self):
-        """初始化摄像头"""
+        """初始化摄像头（单次尝试）"""
         try:
             # 解析设备路径
             device_index = self._parse_device()
@@ -113,9 +146,9 @@ class CameraManager:
             actual_fps = int(self.camera.get(cv2.CAP_PROP_FPS))
 
             if self.debug:
-                print(f"Camera initialized: {self.device}")
-                print(f"  Requested: {self.resolution[0]}x{self.resolution[1]} @ {self.fps}fps")
-                print(f"  Actual: {actual_width}x{actual_height} @ {actual_fps}fps")
+                print(f"摄像头初始化成功: {self.device}")
+                print(f"  请求参数: {self.resolution[0]}x{self.resolution[1]} @ {self.fps}fps")
+                print(f"  实际参数: {actual_width}x{actual_height} @ {actual_fps}fps")
 
             # 预热摄像头(读取并丢弃前几帧)
             for _ in range(5):
