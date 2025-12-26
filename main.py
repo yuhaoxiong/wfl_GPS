@@ -66,6 +66,14 @@ Examples:
         help='Perform health check and exit'
     )
 
+    parser.add_argument(
+        '--mode',
+        type=str,
+        choices=['normal', 'nogps'],
+        default='normal',
+        help='运行模式: normal (需要GPS), nogps (无GPS模式，位置和速度默认为0)'
+    )
+
     args = parser.parse_args()
 
     # 注册信号处理器
@@ -81,8 +89,13 @@ Examples:
         # 加载配置
         print("\n[1/3] Loading configuration...")
         config = load_config(args.config)
+        
+        # 设置运行模式
+        config.system.no_gps_mode = (args.mode == 'nogps')
+        
         print(f"✓ Configuration loaded")
         print(f"    Device ID: {config.system.device_id}")
+        print(f"    Mode: {args.mode}")
         print(f"    GPS Port: {config.gps.serial_port}")
         print(f"    Camera: {config.camera.device}")
         print(f"    Backend: {config.upload.backend_url}")

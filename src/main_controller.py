@@ -42,6 +42,7 @@ class MainController:
         """
         self.config = config
         self.debug = debug
+        self.no_gps_mode = config.system.no_gps_mode  # 保存无GPS模式标志
 
         # 组件
         self.gps_reader: Optional[GPSReader] = None
@@ -77,17 +78,21 @@ class MainController:
     def _init_components(self):
         """初始化各组件"""
         try:
-            # 初始化GPS读取器
-            if self.debug:
-                print("Initializing GPS reader...")
+            # 初始化GPS读取器（仅在非 nogps 模式下）
+            if not self.no_gps_mode:
+                if self.debug:
+                    print("Initializing GPS reader...")
 
-            self.gps_reader = GPSReader(
-                port=self.config.gps.serial_port,
-                slave_address=self.config.gps.slave_address,
-                baudrate=self.config.gps.baudrate,
-                timeout=self.config.gps.timeout,
-                debug=self.debug
-            )
+                self.gps_reader = GPSReader(
+                    port=self.config.gps.serial_port,
+                    slave_address=self.config.gps.slave_address,
+                    baudrate=self.config.gps.baudrate,
+                    timeout=self.config.gps.timeout,
+                    debug=self.debug
+                )
+            else:
+                if self.debug:
+                    print("Skipping GPS reader initialization (nogps mode)")
 
             # 初始化摄像头管理器
             if self.debug:
@@ -185,21 +190,36 @@ class MainController:
                 print(f"  ✓ Camera captured: {capture_result.file_size/1024:.1f} KB")
 
             # 2. 读取GPS数据
-            gps_data = self.gps_reader.get_position_dict()
-
-            if gps_data['valid']:
+            if self.no_gps_mode:
+                # 无GPS模式：使用默认值
+                gps_data = {
+                    'valid': False,
+                    'location': {
+                        'latitude': 0.0,
+                        'longitude': 0.0,
+                        'speed_knots': 0.0
+                    },
+                    'error': 'nogps mode'
+                }
                 if self.debug:
-                    loc = gps_data['location']
-                    print(f"  ✓ GPS valid: {loc['latitude']:.5f}°, {loc['longitude']:.5f}°")
-
-                with self.stats_lock:
-                    self.stats['gps_valid_count'] += 1
+                    print(f"  ⚠ NoGPS mode: using default values (0, 0, 0)")
             else:
-                if self.debug:
-                    print(f"  ⚠ GPS invalid: {gps_data['error']}")
+                # 正常模式：从GPS读取器获取数据
+                gps_data = self.gps_reader.get_position_dict()
 
-                with self.stats_lock:
-                    self.stats['gps_invalid_count'] += 1
+                if gps_data['valid']:
+                    if self.debug:
+                        loc = gps_data['location']
+                        print(f"  ✓ GPS valid: {loc['latitude']:.5f}°, {loc['longitude']:.5f}°")
+
+                    with self.stats_lock:
+                        self.stats['gps_valid_count'] += 1
+                else:
+                    if self.debug:
+                        print(f"  ⚠ GPS invalid: {gps_data['error']}")
+
+                    with self.stats_lock:
+                        self.stats['gps_invalid_count'] += 1
 
             # 3. 打包数据
             location = gps_data.get('location') or {}
@@ -217,10 +237,18 @@ class MainController:
             }
 
             # 4. 异步上传
-            # 如果速度为0,不上传
-            if speed_kmh is None or speed_kmh == 0:
-                if self.debug:
-                    print(f"  ⚠ Speed is 0, skipping upload")
+            # 正常模式：如果速度为0,不上传
+            # 无GPS模式：允许上传（速度默认为0）
+            should_skip_upload = False
+            if not self.no_gps_mode:
+                # 正常模式下，速度为0时跳过上传
+                if speed_kmh is None or speed_kmh == 0:
+                    should_skip_upload = True
+                    if self.debug:
+                        print(f"  ⚠ Speed is 0, skipping upload")
+            
+            if should_skip_upload:
+                pass  # 跳过上传
             elif self.upload_manager.enqueue(payload):
                 if self.debug:
                     print(f"  ✓ Enqueued for upload")
@@ -332,18 +360,23 @@ class MainController:
 
         all_healthy = True
 
-        # 检查GPS
-        if self.debug:
-            print("  Checking GPS module...")
+        # 检查GPS（仅在非 nogps 模式下）
+        if not self.no_gps_mode:
+            if self.debug:
+                print("  Checking GPS module...")
 
-        gps_health = self.gps_reader.health_check()
-        if not gps_health['communication']:
-            print("  ✗ GPS communication failed")
-            all_healthy = False
-        elif self.debug:
-            print(f"  ✓ GPS OK (version: {gps_health['version']})")
+            gps_health = self.gps_reader.health_check()
+            if not gps_health['communication']:
+                print("  ✗ GPS communication failed")
+                all_healthy = False
+            elif self.debug:
+                print(f"  ✓ GPS OK (version: {gps_health['version']})")
+        else:
+            if self.debug:
+                print("  ⚠ Skipping GPS check (nogps mode)")
 
         # 检查摄像头(轮询所有已配置的摄像头)
+        camera_ok_count = 0
         for idx, cam in enumerate(self.camera_managers, start=1):
             if self.debug:
                 print(f"  Checking camera #{idx} ({cam.device})...")
@@ -351,12 +384,21 @@ class MainController:
             camera_health = cam.health_check()
             if not camera_health['camera_opened']:
                 print(f"  ✗ Camera #{idx} not opened")
-                all_healthy = False
+                # 不设置 all_healthy = False，允许辅助摄像头失败
             elif not camera_health['test_capture']:
                 print(f"  ✗ Camera #{idx} test capture failed")
-                all_healthy = False
-            elif self.debug:
-                print(f"  ✓ Camera #{idx} OK (resolution: {camera_health['resolution']})")
+                # 不设置 all_healthy = False，允许辅助摄像头失败
+            else:
+                camera_ok_count += 1
+                if self.debug:
+                    print(f"  ✓ Camera #{idx} OK (resolution: {camera_health['resolution']})")
+        
+        # 至少需要一个摄像头可用
+        if camera_ok_count == 0:
+            print("  ✗ No cameras available")
+            all_healthy = False
+        elif camera_ok_count < len(self.camera_managers):
+            print(f"  ⚠ Only {camera_ok_count}/{len(self.camera_managers)} cameras available")
 
         # 检查上传管理器
         if self.debug:

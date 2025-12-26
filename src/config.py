@@ -79,6 +79,7 @@ class SystemConfig:
     log_level: str = "INFO"
     log_path: str = "/var/log/road-capture/app.log"
     capture_interval: float = 2.0  # 采集间隔(秒)
+    no_gps_mode: bool = False  # 无GPS模式（位置和速度默认为0）
 
 
 @dataclass
