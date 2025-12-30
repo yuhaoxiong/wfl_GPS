@@ -8,8 +8,17 @@ Coordinates camera capture, GPS reading, and HTTP upload with 1Hz scheduling
 
 import time
 import threading
+import base64
 from datetime import datetime
 from typing import Optional, Dict, Any, List
+
+import numpy as np
+
+try:
+    from skimage.metrics import structural_similarity as ssim
+except ImportError:
+    ssim = None
+    print("Warning: scikit-image not found. Image similarity feature disabled.")
 
 try:
     from apscheduler.schedulers.background import BackgroundScheduler
@@ -58,6 +67,10 @@ class MainController:
         self.running = False
         self.paused = False
 
+        # 图片相似度判断（仅无GPS模式）
+        self.last_image_array: Optional[np.ndarray] = None  # 前一张图片的灰度数组
+        self.similarity_threshold = config.system.similarity_threshold
+
         # 统计信息
         self.stats = {
             'total_captures': 0,
@@ -66,6 +79,7 @@ class MainController:
             'gps_valid_count': 0,
             'gps_invalid_count': 0,
             'upload_count': 0,
+            'skipped_by_similarity': 0,  # 因相似度跳过的次数
             'start_time': None,
             'last_capture_time': None,
             'last_error': None
@@ -151,6 +165,69 @@ class MainController:
 
         except Exception as e:
             raise RuntimeError(f"Failed to initialize components: {e}")
+
+    def _calculate_similarity(self, image_base64: str) -> Optional[float]:
+        """
+        计算当前图片与前一张图片的SSIM相似度
+        
+        Args:
+            image_base64: 当前图片的base64编码
+            
+        Returns:
+            相似度值(0-1)，如果无法计算则返回None
+        """
+        if ssim is None:
+            return None
+            
+        if self.last_image_array is None:
+            return None
+            
+        try:
+            # 解码base64图片
+            import cv2
+            img_data = base64.b64decode(image_base64)
+            img_array = np.frombuffer(img_data, dtype=np.uint8)
+            current_image = cv2.imdecode(img_array, cv2.IMREAD_GRAYSCALE)
+            
+            if current_image is None:
+                return None
+            
+            # 调整尺寸以匹配前一张图片
+            if current_image.shape != self.last_image_array.shape:
+                current_image = cv2.resize(
+                    current_image, 
+                    (self.last_image_array.shape[1], self.last_image_array.shape[0])
+                )
+            
+            # 计算SSIM
+            similarity = ssim(self.last_image_array, current_image)
+            
+            return float(similarity)
+            
+        except Exception as e:
+            if self.debug:
+                print(f"  ⚠ Failed to calculate similarity: {e}")
+            return None
+
+    def _update_last_image(self, image_base64: str):
+        """
+        更新前一张图片缓存（灰度图）
+        
+        Args:
+            image_base64: 图片的base64编码
+        """
+        try:
+            import cv2
+            img_data = base64.b64decode(image_base64)
+            img_array = np.frombuffer(img_data, dtype=np.uint8)
+            gray_image = cv2.imdecode(img_array, cv2.IMREAD_GRAYSCALE)
+            
+            if gray_image is not None:
+                self.last_image_array = gray_image
+                
+        except Exception as e:
+            if self.debug:
+                print(f"  ⚠ Failed to update last image: {e}")
 
     def _capture_task(self):
         """1Hz采集任务"""
@@ -238,17 +315,44 @@ class MainController:
 
             # 4. 异步上传
             # 正常模式：如果速度为0,不上传
-            # 无GPS模式：允许上传（速度默认为0）
+            # 无GPS模式：允许上传（速度默认为0），但需要判断图片相似度
             should_skip_upload = False
+            skip_reason = ""
+            
             if not self.no_gps_mode:
                 # 正常模式下，速度为0时跳过上传
                 if speed_kmh is None or speed_kmh == 0:
                     should_skip_upload = True
+                    skip_reason = "Speed is 0"
+            else:
+                # 无GPS模式：检查图片相似度
+                if ssim is not None:
+                    similarity = self._calculate_similarity(capture_result.image_base64)
+                    
+                    if similarity is not None:
+                        if self.debug:
+                            print(f"  ⓘ Image similarity: {similarity:.4f}")
+                        
+                        if similarity >= self.similarity_threshold:
+                            should_skip_upload = True
+                            skip_reason = f"Similar to previous (SSIM={similarity:.4f})"
+                            
+                            with self.stats_lock:
+                                self.stats['skipped_by_similarity'] += 1
+                    
+                    # 无论是否上传，都更新前一张图片缓存
+                    if not should_skip_upload:
+                        # 只有在上传时才更新缓存
+                        self._update_last_image(capture_result.image_base64)
+                else:
+                    # scikit-image未安装，始终上传
                     if self.debug:
-                        print(f"  ⚠ Speed is 0, skipping upload")
+                        print(f"  ⚠ SSIM not available, uploading anyway")
+                    self._update_last_image(capture_result.image_base64)
             
             if should_skip_upload:
-                pass  # 跳过上传
+                if self.debug:
+                    print(f"  ⚠ {skip_reason}, skipping upload")
             elif self.upload_manager.enqueue(payload):
                 if self.debug:
                     print(f"  ✓ Enqueued for upload")
@@ -469,6 +573,12 @@ class MainController:
         print(f"  Uploaded: {upload_stats.get('total_uploaded', 0)}")
         print(f"  Failed: {upload_stats.get('total_failed', 0)}")
         print(f"  Queue length: {upload_stats.get('queue_length', 0)}")
+        
+        # 显示相似度跳过统计（仅无GPS模式）
+        if self.no_gps_mode:
+            print(f"\nSimilarity Filter Statistics (NoGPS mode):")
+            print(f"  Skipped by similarity: {stats.get('skipped_by_similarity', 0)}")
+            print(f"  Threshold: {self.similarity_threshold:.2f}")
 
         if stats.get('uptime_seconds'):
             uptime = stats['uptime_seconds']

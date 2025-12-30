@@ -80,6 +80,7 @@ class SystemConfig:
     log_path: str = "/var/log/road-capture/app.log"
     capture_interval: float = 2.0  # 采集间隔(秒)
     no_gps_mode: bool = False  # 无GPS模式（位置和速度默认为0）
+    similarity_threshold: float = 0.9  # 图片相似度阈值（仅无GPS模式，0-1之间）
 
 
 @dataclass
